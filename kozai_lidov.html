@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kozai–Lidov Mechanism — quadrupole-order secular dynamics</title>
+<!--
+================================================================================
+Kozai–Lidov mechanism: interactive educational visualization
+================================================================================
+
+PHYSICAL MODEL (what is rigorous, what is schematic)
+----------------------------------------------------
+This app integrates the DOUBLY-AVERAGED (secular), QUADRUPOLE-ORDER,
+TEST-PARTICLE-LIMIT Hamiltonian of a hierarchical triple system, written in
+Delaunay-like variables:
+
+    g  = omega  (argument of pericenter of the inner orbit)
+    G  = sqrt(1 - e^2)                 (dimensionless angular momentum)
+    H  = sqrt(1 - e^2) * cos(i)        ("Kozai integral", conserved)
+
+with e = inner-orbit eccentricity and i = MUTUAL inclination between the
+inner and outer orbital planes. The dimensionless quadrupole Hamiltonian is
+
+    Phi(e, i, omega) = (2 + 3 e^2) (3 cos^2 i - 1) + 15 e^2 sin^2 i cos(2 omega)
+
+This Phi does not depend on Omega (longitude of ascending node), hence
+H = sqrt(1-e^2) cos(i) is an EXACT constant of motion of this model.
+
+ESTABLISHED vs. SIMPLIFIED / CONCEPTUAL
+---------------------------------------
+ESTABLISHED (standard results of the quadrupole, test-particle theory):
+  * The functional form of Phi above (up to overall normalization and an
+    additive constant, which vary between papers).
+  * Conservation of H (because dPhi/dOmega = 0).
+  * The critical inclination for e0 ~ 0:  i_c = arccos(sqrt(3/5)) ~ 39.23 deg
+    (and its retrograde mirror 180 - i_c ~ 140.77 deg). NOTE: this critical
+    angle is derived in the limit e0 -> 0; for e0 significantly different
+    from 0 the libration/circulation boundary in (omega, e) shifts.
+  * For e0 ~ 0 the maximum eccentricity e_max = sqrt(1 - (5/3) cos^2 i0).
+
+CONCEPTUAL / SIMPLIFIED (do NOT read quantitative physics off these):
+  * The time axis is a DIMENSIONLESS secular time tau. The physical
+    Kozai-Lidov timescale T_KL depends on masses and (a_out/a_in) with
+    coefficients that differ between references; we deliberately do NOT
+    implement that conversion. Consult the primary literature, e.g.
+    Naoz (2016, ARA&A) or Fabrycky & Tremaine (2007) — and verify the exact
+    formula in the original papers before using any dimensional timescale.
+  * The overall SIGN / normalization of Phi differs between references;
+    it only rescales/reverses the dimensionless time and does not change
+    the (e, i, omega) phase-space structure shown here.
+  * The 3D scene is SCHEMATIC and NOT TO SCALE: a real hierarchical triple
+    has a_out/a_in >> 1. The stars' motion along the ellipse is illustrative
+    only (in doubly-averaged theory the orbital phases are averaged out);
+    the drawn angular speed merely mimics Kepler's second law.
+  * The inner binary is drawn as a RELATIVE orbit (secondary around primary).
+    In the exact test-particle limit the inner body is massless; finite
+    inner-mass-ratio effects on the secular equations are NOT modeled.
+  * NOT INCLUDED: octupole-order terms (eccentric Kozai-Lidov, orbit flips),
+    general relativistic precession, tides, mass loss, short-period
+    (non-secular) oscillations.
+
+EQUATIONS OF MOTION (as specified; canonical pair is (omega, G), H fixed)
+-------------------------------------------------------------------------
+    dG/dtau     = - dPhi/domega  =  + 30 e^2 sin^2(i) sin(2 omega)
+                  (analytic: trivial derivative of the cos(2 omega) term)
+    domega/dtau = + dPhi/dG
+                  computed by CENTRAL FINITE DIFFERENCE in G at fixed (omega, H):
+                  dPhi/dG ~ [Phi(G+h) - Phi(G-h)] / (2h),  h = 1e-6,
+                  with e = sqrt(1-G^2), i = arccos(H/G) inside Phi.
+                  This numerical-derivative design is INTENTIONAL (per spec):
+                  it avoids the risk of mis-typing the analytic coefficients.
+                  Near the domain boundaries (G -> 1 or G -> |H|) a one-sided
+                  stencil is used so that Phi is never evaluated outside its
+                  domain |H| <= G <= 1.
+    dOmega/dtau = + dPhi/dH   (also finite difference; this equation is
+                  DECOUPLED from (G, omega) — it is integrated only to
+                  animate nodal precession in 3D and does not feed back.)
+
+CONSERVATION CHECKS SHOWN IN THE UI
+-----------------------------------
+  * H: in THIS formulation H is a FIXED PARAMETER of the equations, so
+    |H(t) - H(0)| = 0 identically BY CONSTRUCTION — it cannot detect
+    integrator error. The UI states this explicitly (correctness note).
+  * Phi (the Hamiltonian itself): Phi IS a nontrivial conserved quantity of
+    the autonomous flow, and its numerical drift |Phi(t)-Phi(0)| is the
+    meaningful integrator-quality check. It is plotted in real time.
+
+INTEGRATOR
+----------
+  Classic RK4 with ADAPTIVE STEP SIZE via step doubling: one full step vs.
+  two half steps; the difference/15 estimates the local truncation error
+  (RK4 is 4th order). Steps are accepted against a user-selectable
+  tolerance; dt is adjusted as dt * clip(0.9 (tol/err)^(1/5), 0.25, 4).
+  If e -> 1 (G below a floor) the run is paused with a warning: the secular
+  doubly-averaged approximation itself breaks down there.
+================================================================================
+-->
+<style>
+  :root{
+    --bg:#0b0f1a; --panel:#111827; --panel2:#0e1524; --line:#22304a;
+    --ink:#dbe4f3; --ink-dim:#8fa0bd; --ink-faint:#5b6b88;
+    --warm:#ffb45e; --warm2:#ff7a45; --cool:#5fd0ff; --cool2:#3a7bd5;
+    --ok:#5ee08a; --warn:#ffd166; --bad:#ff6b6b;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI","Hiragino Sans","Noto Sans JP",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13px;overflow:hidden}
+  #app{display:grid;grid-template-columns:1fr 315px 330px;grid-template-rows:100vh;height:100vh;gap:1px;background:var(--line)}
+  /* overflow:hidden + forced 100% canvas size: without this, on HiDPI displays
+     the WebGL canvas (attribute size = css * devicePixelRatio) overflowed the
+     container and covered the charts / control panel. */
+  #view3d{position:relative;background:var(--bg);min-width:0;min-height:0;overflow:hidden}
+  #view3d canvas{display:block;width:100% !important;height:100% !important}
+  #chartsCol{background:var(--panel2);overflow-y:auto;padding:12px 12px 18px;min-width:0}
+  #chartsCol h2{margin-top:2px}
+  #sidebar{background:var(--panel);overflow-y:auto;padding:14px 14px 20px;min-width:0}
+  .chartwrap{margin-bottom:16px}
+  .chartbox{background:#0c1322;border:1px solid var(--line);border-radius:6px;position:relative;height:150px;min-width:0}
+  .chartbox canvas{position:absolute;inset:0;width:100%;height:100%}
+  .caption{font-size:11px;line-height:1.65;color:var(--ink-dim);margin-top:6px}
+  .caption b{color:var(--ink)}
+  h1{font-size:15px;font-weight:650;letter-spacing:.02em}
+  h2{font-size:11px;font-weight:600;color:var(--ink-dim);text-transform:uppercase;letter-spacing:.08em;margin:16px 0 6px;border-bottom:1px solid var(--line);padding-bottom:4px}
+  .sub{color:var(--ink-dim);font-size:11px;margin-top:2px}
+  .ctrl{margin:10px 0}
+  .ctrl label{display:flex;justify-content:space-between;font-size:12px;color:var(--ink-dim);margin-bottom:3px}
+  .ctrl label b{color:var(--ink);font-family:var(--mono);font-weight:500}
+  input[type=range]{width:100%;accent-color:var(--warm)}
+  button{background:#1b2740;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:7px 12px;font-size:12px;cursor:pointer;font-family:var(--sans)}
+  button:hover{background:#233150}
+  button:focus-visible{outline:2px solid var(--cool)}
+  button.primary{background:#2b3f68;border-color:#3a5288}
+  .btnrow{display:flex;gap:8px;margin:10px 0}
+  select{background:#1b2740;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px}
+  table.readout{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px}
+  table.readout td{padding:2.5px 0;border-bottom:1px dotted #1c2842}
+  table.readout td:last-child{text-align:right;color:var(--ink)}
+  table.readout td:first-child{color:var(--ink-dim)}
+  .note{background:#141d33;border:1px solid var(--line);border-left:3px solid var(--cool2);border-radius:6px;padding:8px 10px;font-size:11.5px;line-height:1.55;color:var(--ink-dim);margin:8px 0}
+  .note b{color:var(--ink)}
+  .note.warm{border-left-color:var(--warm)}
+  .badge{display:inline-block;font-family:var(--mono);font-size:11px;border-radius:4px;padding:1px 7px;margin-left:6px}
+  .badge.ok{background:#123023;color:var(--ok)} .badge.warn{background:#33290f;color:var(--warn)} .badge.bad{background:#331414;color:var(--bad)}
+  #overlayTL{position:absolute;top:10px;left:12px;font-size:11px;color:var(--ink-dim);pointer-events:none;line-height:1.6;text-shadow:0 1px 3px #000}
+  #overlayTL .big{font-size:13px;color:var(--ink);font-weight:600}
+  #schematicTag{position:absolute;bottom:10px;left:12px;font-family:var(--mono);font-size:11px;color:var(--warn);background:rgba(20,20,10,.55);border:1px solid #4a3d16;border-radius:5px;padding:3px 9px;pointer-events:none}
+  #warnBanner{position:absolute;top:10px;right:12px;max-width:360px;display:none;background:rgba(51,20,20,.92);border:1px solid #5c2626;color:#ffb3b3;border-radius:6px;padding:8px 11px;font-size:12px;line-height:1.5}
+  .charttitle{position:absolute;top:5px;left:9px;font-size:10.5px;color:var(--ink-dim);font-family:var(--mono);pointer-events:none;z-index:2}
+  .legend{position:absolute;top:5px;right:9px;font-size:10.5px;font-family:var(--mono);pointer-events:none;z-index:2}
+  /* labels projected onto the 3D view while paused (definitions of i, e, ω) */
+  .lbl3d{position:absolute;display:none;transform:translate(-50%,-135%);font-family:var(--mono);font-size:11px;color:var(--ink);background:rgba(12,18,34,.88);border:1px solid var(--line);border-radius:4px;padding:2px 7px;pointer-events:none;white-space:nowrap;z-index:3}
+  /* legend of bodies in the 3D scene */
+  #legend3d{position:absolute;bottom:34px;right:12px;max-width:330px;background:rgba(10,14,26,.84);border:1px solid var(--line);border-radius:6px;padding:8px 11px;font-size:11px;line-height:1.7;color:var(--ink-dim);pointer-events:none}
+  #legend3d .lg-title{color:var(--ink);font-weight:600;margin-bottom:3px}
+  #legend3d b{color:var(--ink)}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+  .dot.sm{width:7px;height:7px}
+  .sw{display:inline-block;width:16px;height:3px;margin-right:6px;vertical-align:2px;border-radius:2px}
+  a{color:var(--cool)}
+  @media (max-width:1150px){
+    body{overflow:auto}
+    #app{grid-template-columns:1fr;grid-template-rows:auto;height:auto}
+    #view3d{height:55vh}
+  }
+  @media (prefers-reduced-motion:reduce){ .spinhint{display:none} }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div id="view3d">
+    <div id="overlayTL">
+      <div class="big">Kozai–Lidov oscillation</div>
+      <div>doubly-averaged, quadrupole-order, test-particle limit</div>
+      <div class="spinhint" style="color:var(--ink-faint)">drag: rotate camera / wheel: zoom</div>
+      <div style="color:var(--warn)">Pause 中は i・e・ω の幾何学的定義を軌道上に表示します</div>
+    </div>
+    <div id="schematicTag">SCHEMATIC — NOT TO SCALE (実スケールでは a_out ≫ a_in)</div>
+    <div id="warnBanner"></div>
+
+    <!-- legend of the bodies / lines in the schematic scene -->
+    <div id="legend3d">
+      <div class="lg-title">凡例 — 階層的三体系（惑星は登場しません）</div>
+      <div><span class="dot" style="background:#ffcf7a"></span><b>star A</b> — inner binary の primary。relative orbit 表示のため楕円の focus に固定して描画</div>
+      <div><span class="dot" style="background:#ff8a5c"></span><b>star B</b> — inner binary の secondary。<b>A と B の 2 つが連星（inner binary）</b>で、この軌道の e, i, ω が振動する</div>
+      <div><span class="dot" style="background:#5fd0ff"></span><b>outer companion</b> — 連星を遠くから公転する第三体（perturber）。恒星でも惑星でもよい</div>
+      <div><span class="dot sm" style="background:#ffe9b0"></span>pericenter marker（近点。ω の precession で移動）</div>
+      <div><span class="sw" style="background:#ffb45e"></span>inner orbit ／ 同色の矢印はその angular momentum 方向</div>
+      <div><span class="sw" style="background:#3a7bd5"></span>outer orbit ／ 同色の矢印はその angular momentum 方向（= 半透明の基準面の法線）</div>
+    </div>
+
+    <!-- projected labels shown while paused -->
+    <div class="lbl3d" id="lbl_i"></div>
+    <div class="lbl3d" id="lbl_w"></div>
+    <div class="lbl3d" id="lbl_e"></div>
+    <div class="lbl3d" id="lbl_node"></div>
+  </div>
+
+  <div id="chartsCol">
+    <h2>リアルタイムグラフ</h2>
+
+    <div class="chartwrap">
+      <div class="chartbox">
+        <div class="charttitle">e(τ), i(τ)</div>
+        <div class="legend"><span style="color:var(--warm)">e</span> <span style="color:var(--cool)">i</span></div>
+        <canvas id="chartEI"></canvas>
+      </div>
+      <div class="caption">
+        <b>離心率 e と軌道傾斜角 i の「交換」。</b>
+        <span style="color:var(--warm)">e</span> は内側の連星軌道（inner orbit）の eccentricity
+        （0 = 真円、1 に近いほど細長い楕円。左軸 0–1）。
+        <span style="color:var(--cool)">i</span> は inner orbit と外側の伴星軌道（outer orbit）の
+        軌道面のなす角 mutual inclination（右軸 0–180°）。
+        Kozai–Lidov oscillation の本質はこの 2 つの<b>逆相関</b>：
+        e が大きくなるとき i が小さくなり、また戻る、という周期的な交換です
+        （保存量 H = √(1−e²)cos i が一定に保たれるため）。
+        水色の破線は critical inclination i_c ≈ 39.2°（e₀≈0 の場合、
+        初期の i がこの線より下だと oscillation はほぼ起きません）。
+      </div>
+    </div>
+
+    <div class="chartwrap">
+      <div class="chartbox">
+        <div class="charttitle">ω(τ) [deg]</div>
+        <canvas id="chartW"></canvas>
+      </div>
+      <div class="caption">
+        <b>楕円の「向き」の変化。</b>
+        ω（argument of pericenter）は、軌道面内で楕円の長軸がどちらを向いているかを表す角度です。
+        ω が 0°→360° を一方向に回り続ける（グラフでは鋸歯状）場合を <b>circulation</b>、
+        破線で示した 90° または 270° の周りを往復する場合を <b>libration</b> と呼びます。
+        どちらの振る舞いになるかは初期条件（i₀, e₀, ω₀）で決まり、
+        libration は Kozai resonance に「捕獲」された状態に対応します。
+      </div>
+    </div>
+
+    <div class="chartwrap">
+      <div class="chartbox">
+        <div class="charttitle">log10 |ΔΦ/Φ_ref|</div>
+        <canvas id="chartH"></canvas>
+      </div>
+      <div class="caption">
+        <b>計算の検証用（物理ではなく数値精度のチェック）。</b>
+        このモデルではエネルギーに相当する量 Hamiltonian Φ が厳密に一定であるべきなので、
+        その相対誤差を log10 スケールで表示しています。<b>線が下にあるほど計算が正確</b>です
+        （例: −8 は誤差 10⁻⁸）。線が急上昇したら数値積分に問題がある印です。
+        もう一つの保存量 H = √(1−e²)cos i は、この実装では固定パラメータとして扱うため
+        構成上厳密に保存されます（右パネル「Conservation checks」の注記を参照）。
+      </div>
+    </div>
+  </div>
+
+  <div id="sidebar">
+    <h1>Kozai–Lidov mechanism</h1>
+    <div class="sub">hierarchical triple / secular quadrupole dynamics</div>
+    <div class="note" style="margin-top:10px">
+      <b>操作パネル:</b> 物理量を変えるスライダーは、すぐ下の
+      「Initial conditions」（i₀・e₀・ω₀）と「Time &amp; integrator」（simulation speed）にあります。
+      スライダーを動かしたら <b>Apply &amp; restart</b> を押すと、その初期条件でシミュレーションが再スタートします
+      （speed と tolerance は即時反映）。
+    </div>
+
+    <h2>Initial conditions</h2>
+    <div class="ctrl"><label>initial mutual inclination i₀ <b id="v_i0">65.0°</b></label>
+      <input type="range" id="s_i0" min="0" max="180" step="0.1" value="65"></div>
+    <div class="ctrl"><label>initial eccentricity e₀ <b id="v_e0">0.05</b></label>
+      <input type="range" id="s_e0" min="0.005" max="0.9" step="0.005" value="0.05"></div>
+    <div class="ctrl"><label>initial arg. of pericenter ω₀ <b id="v_w0">0°</b></label>
+      <input type="range" id="s_w0" min="0" max="360" step="1" value="0"></div>
+    <div class="btnrow">
+      <button class="primary" id="btnApply">Apply &amp; restart</button>
+      <button id="btnPause">Pause</button>
+    </div>
+    <div class="note" id="critNote"></div>
+
+    <h2>Time &amp; integrator</h2>
+    <div class="ctrl"><label>simulation speed (dτ per second) <b id="v_speed">0.30</b></label>
+      <input type="range" id="s_speed" min="-2" max="0.9" step="0.01" value="-0.523"></div>
+    <div class="ctrl"><label>RK4 step-doubling tolerance
+      <select id="s_tol">
+        <option value="1e-8">1e-8</option>
+        <option value="1e-10" selected>1e-10</option>
+        <option value="1e-12">1e-12</option>
+      </select></label></div>
+    <div class="note">
+      時間軸は<b>無次元時間 τ</b>（quadrupole secular timescale で規格化した概念的な時間）です。
+      実際の系での秒・年への変換係数（質量比・a_out/a_in 依存）は文献ごとに定義・規格化が異なるため、
+      本アプリでは<b>意図的に実装していません</b>。物理的な T_KL が必要な場合は、
+      Naoz 2016 (ARA&amp;A) や Fabrycky &amp; Tremaine 2007 などの<b>原論文で正確な式を必ず確認</b>してください。
+      また Hamiltonian の全体符号・規格化も文献間で異なり、τ の向き・速さのみに影響します。
+    </div>
+
+    <h2>State (live)</h2>
+    <table class="readout">
+      <tr><td>τ</td><td id="r_tau">0</td></tr>
+      <tr><td>e</td><td id="r_e">–</td></tr>
+      <tr><td>i (mutual)</td><td id="r_i">–</td></tr>
+      <tr><td>ω</td><td id="r_w">–</td></tr>
+      <tr><td>Ω (node; decoupled)</td><td id="r_Om">–</td></tr>
+      <tr><td>e_max theory (e₀≈0 limit)</td><td id="r_emax">–</td></tr>
+      <tr><td>ω regime</td><td id="r_regime">–</td></tr>
+    </table>
+
+    <h2>Conservation checks</h2>
+    <table class="readout">
+      <tr><td>H = √(1−e²)cos i</td><td id="r_H">–</td></tr>
+      <tr><td>|H(τ) − H(0)|</td><td id="r_dH">0 (by construction)</td></tr>
+      <tr><td>|ΔΦ/Φ_ref|</td><td id="r_dPhi">–</td></tr>
+      <tr><td>integrator step dτ</td><td id="r_dt">–</td></tr>
+    </table>
+    <div class="note">
+      <b>正確性に関する注記:</b> この実装では正準対 (ω, G) を積分し、<b>H は固定パラメータ</b>として扱います。
+      そのため |H(τ)−H(0)| は<b>構成上厳密に 0</b> であり、積分誤差の検出には使えません
+      （Φ が Ω に依存しないことの帰結を、実装レベルで「厳密に」反映した形です）。
+      数値積分の信頼性チェックとして意味を持つのは <b>Hamiltonian Φ 自体の保存</b>で、
+      その相対ドリフト |ΔΦ/Φ_ref| を上とグラフに表示しています（Φ_ref = max(|Φ(0)|, 1)）。
+    </div>
+
+    <h2>Model limitations（明示）</h2>
+    <div class="note warm">
+      本モデルは <b>quadrupole-order, doubly-averaged, secular approximation（test-particle limit）</b>です。
+      以下は<b>一切含まれていません</b>:
+      octupole 項（eccentric Kozai–Lidov、orbit flip）、general relativistic precession、
+      tidal effects、mass loss、短周期（非永年）振動。
+      inner binary の質量比による効果も簡略化されています。
+      3D 表示は縮尺無視の模式図で、恒星が楕円上を動くアニメーションは
+      （doubly-averaged theory では軌道位相は平均化済みのため）概念的な演出です。
+      Kepler の第2法則を模した角速度で描いていますが、定量的な意味はありません。
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+/* =========================================================================
+   1. PHYSICS CORE  (see the large header comment for the full specification)
+   ========================================================================= */
+
+const FD_H = 1e-6;      // finite-difference step in G (and H) — per spec
+const G_FLOOR = 0.02;   // e > ~0.9998 → secular approx. breaks; pause & warn
+
+/**
+ * Dimensionless quadrupole, test-particle Hamiltonian (ESTABLISHED form,
+ * up to overall normalization / additive constant which vary by reference):
+ *   Phi = (2 + 3 e^2)(3 cos^2 i - 1) + 15 e^2 sin^2 i cos(2 omega)
+ * evaluated via e^2 = 1 - G^2, cos i = H/G.
+ */
+function Phi(G, w, H){
+  const G2 = G*G;
+  const e2 = Math.max(0, 1 - G2);          // guard: tiny FP overshoot of G>1
+  let ci = H / G;
+  if (ci > 1 || ci < -1){
+    // |H/G| > 1 means (G, H) left the physically allowed domain — a bug or
+    // a boundary overshoot. Warn (per spec) and clamp for evaluation.
+    console.warn(`Kozai domain violation: |H/G| = ${Math.abs(ci)} > 1 (G=${G}, H=${H})`);
+    ci = Math.max(-1, Math.min(1, ci));
+  }
+  const s2i = Math.max(0, 1 - ci*ci);
+  return (2 + 3*e2) * (3*ci*ci - 1) + 15 * e2 * s2i * Math.cos(2*w);
+}
+
+/**
+ * dPhi/dG at fixed (omega, H), by CENTRAL finite difference (intentional
+ * design per spec — do not replace with an analytic expression).
+ * Near the domain boundary |H| <= G <= 1 we shift to a one-sided stencil so
+ * Phi is never evaluated at an unphysical point.
+ */
+function dPhi_dG(G, w, H){
+  const lo = Math.abs(H), hi = 1;
+  let a = G - FD_H, b = G + FD_H;
+  if (b > hi){ b = G; a = G - 2*FD_H; }        // backward difference at G≈1
+  if (a < lo){ a = G; b = G + 2*FD_H; }        // forward difference at G≈|H|
+  if (b - a <= 0){ return 0; }                  // degenerate corner (i=0 or 180 & e=0)
+  return (Phi(b, w, H) - Phi(a, w, H)) / (b - a);
+}
+
+/** dPhi/dH at fixed (G, omega) — used ONLY for the decoupled nodal-precession
+ *  animation dOmega/dtau = +dPhi/dH. Does not feed back into (G, omega). */
+function dPhi_dH(G, w, H){
+  // keep |H±h| <= G:
+  let a = H - FD_H, b = H + FD_H;
+  if (Math.abs(b) > G){ b = H; a = H - 2*FD_H; }
+  if (Math.abs(a) > G){ a = H; b = H + 2*FD_H; }
+  if (b - a <= 0){ return 0; }
+  return (Phi(G, w, b) - Phi(G, w, a)) / (b - a);
+}
+
+/** Equations of motion. State y = [G, omega, Omega]; H is a fixed parameter.
+ *  dG/dtau     = -dPhi/domega = +30 e^2 sin^2 i sin(2 omega)   (analytic, trivial)
+ *  domega/dtau = +dPhi/dG                                       (finite diff.)
+ *  dOmega/dtau = +dPhi/dH                                       (finite diff., decoupled)
+ */
+function deriv(y, H){
+  const G = y[0], w = y[1];
+  const e2 = Math.max(0, 1 - G*G);
+  let ci = H / G;
+  if (ci > 1) ci = 1; else if (ci < -1) ci = -1;
+  const s2i = Math.max(0, 1 - ci*ci);
+  const dG = 30 * e2 * s2i * Math.sin(2*w);   // = -dPhi/domega
+  const dw = dPhi_dG(G, w, H);
+  const dO = dPhi_dH(G, w, H);
+  return [dG, dw, dO];
+}
+
+/* ---- classic RK4 single step ---- */
+function rk4(y, dt, H){
+  const k1 = deriv(y, H);
+  const y2 = [y[0]+0.5*dt*k1[0], y[1]+0.5*dt*k1[1], y[2]+0.5*dt*k1[2]];
+  const k2 = deriv(y2, H);
+  const y3 = [y[0]+0.5*dt*k2[0], y[1]+0.5*dt*k2[1], y[2]+0.5*dt*k2[2]];
+  const k3 = deriv(y3, H);
+  const y4 = [y[0]+dt*k3[0], y[1]+dt*k3[1], y[2]+dt*k3[2]];
+  const k4 = deriv(y4, H);
+  return [
+    y[0] + dt/6*(k1[0]+2*k2[0]+2*k3[0]+k4[0]),
+    y[1] + dt/6*(k1[1]+2*k2[1]+2*k3[1]+k4[1]),
+    y[2] + dt/6*(k1[2]+2*k2[2]+2*k3[2]+k4[2]),
+  ];
+}
+
+/**
+ * Adaptive RK4 via STEP DOUBLING:
+ * one full step (y1) vs two half steps (y2); for a 4th-order method the
+ * local error of y2 is estimated by |y2 - y1| / 15 (Richardson).
+ * We accept y2 (the more accurate solution) when err <= tol and adapt
+ * dt_next = dt * clip( 0.9 (tol/err)^(1/5), 0.25, 4 ).
+ * (Low-order methods like Euler are deliberately avoided: secular runs are
+ *  long and conserved-quantity drift would be visible.)
+ */
+function adaptiveStep(y, dt, tol, H){
+  for (let iter = 0; iter < 30; iter++){
+    const y1 = rk4(y, dt, H);
+    const ym = rk4(y, dt/2, H);
+    const y2 = rk4(ym, dt/2, H);
+    const err = Math.max(
+      Math.abs(y2[0]-y1[0]),
+      Math.abs(y2[1]-y1[1]) / (1 + Math.abs(y[1])),   // omega grows unbounded → relative
+      Math.abs(y2[2]-y1[2]) / (1 + Math.abs(y[2]))
+    ) / 15;
+    if (err <= tol || dt < 1e-12){
+      const fac = err > 0 ? Math.min(4, Math.max(0.25, 0.9 * Math.pow(tol/err, 0.2))) : 4;
+      return { y: y2, dtUsed: dt, dtNext: Math.min(0.5, dt * fac) };  // cap dt for robustness
+    }
+    dt *= Math.max(0.25, 0.9 * Math.pow(tol/err, 0.2));  // reject & retry smaller
+  }
+  return { y: rk4(y, dt, H), dtUsed: dt, dtNext: dt };   // fallback (should not happen)
+}
+
+/* =========================================================================
+   2. SIMULATION STATE
+   ========================================================================= */
+const D2R = Math.PI/180, R2D = 180/Math.PI;
+const I_CRIT = Math.acos(Math.sqrt(3/5)) * R2D;   // ≈ 39.2315…° (established, e0→0 limit)
+
+const sim = {
+  H: 0, y: [1,0,0], tau: 0, dt: 1e-4, tol: 1e-10,
+  Phi0: 0, PhiRef: 1, running: true, broken: false,
+  e0: 0.05, i0deg: 65, w0deg: 0,
+  maxRelPhiDrift: 0,
+};
+
+function eOf(G){ return Math.sqrt(Math.max(0, 1 - G*G)); }
+function iOf(G, H){ return Math.acos(Math.max(-1, Math.min(1, H/G))); }
+
+function resetSim(){
+  sim.e0   = parseFloat(el.s_e0.value);
+  sim.i0deg= parseFloat(el.s_i0.value);
+  sim.w0deg= parseFloat(el.s_w0.value);
+  const G0 = Math.sqrt(1 - sim.e0*sim.e0);
+  sim.H = G0 * Math.cos(sim.i0deg * D2R);   // Kozai integral: fixed hereafter
+  sim.y = [G0, sim.w0deg * D2R, 0];
+  sim.tau = 0; sim.dt = 1e-4;
+  sim.Phi0 = Phi(G0, sim.y[1], sim.H);
+  sim.PhiRef = Math.max(Math.abs(sim.Phi0), 1);  // avoid /0 when Phi0 ≈ 0
+  sim.broken = false; sim.running = true;
+  sim.maxRelPhiDrift = 0;
+  el.btnPause.textContent = "Pause";
+  series.clear();
+  hideWarn();
+  updateCritNote();
+}
+
+/** Advance the secular integration by Δτ (called each animation frame). */
+function advance(dTau){
+  if (!sim.running || sim.broken || dTau <= 0) return;
+  let remaining = dTau;
+  let guard = 0;
+  while (remaining > 1e-15 && guard++ < 4000){
+    const step = Math.min(sim.dt, remaining);
+    const res = adaptiveStep(sim.y, step, sim.tol, sim.H);
+    sim.y = res.y; sim.tau += res.dtUsed; sim.dt = res.dtNext;
+    remaining -= res.dtUsed;
+    // domain guards -------------------------------------------------------
+    if (sim.y[0] > 1){                       // FP overshoot above e=0
+      if (sim.y[0] > 1 + 1e-9) console.warn("G exceeded 1 by", sim.y[0]-1);
+      sim.y[0] = 1;
+    }
+    if (sim.y[0] < Math.abs(sim.H)){         // would make |cos i| > 1
+      console.warn("G dropped below |H| — clamped. G=", sim.y[0], "H=", sim.H);
+      sim.y[0] = Math.abs(sim.H);
+    }
+    if (sim.y[0] < G_FLOOR){                 // e → 1 : model invalid
+      sim.broken = true; sim.running = false;
+      showWarn("e → 1 に接近したため一時停止しました。この極限では doubly-averaged secular approximation 自体が破綻し、実系では GR precession・tides・衝突等が支配的になります（本モデルには含まれません）。初期条件を変えて Apply & restart してください。");
+      break;
+    }
+  }
+}
+
+/* =========================================================================
+   3. UI ELEMENTS & READOUTS
+   ========================================================================= */
+const $ = id => document.getElementById(id);
+const el = {
+  s_i0:$("s_i0"), s_e0:$("s_e0"), s_w0:$("s_w0"), s_speed:$("s_speed"), s_tol:$("s_tol"),
+  v_i0:$("v_i0"), v_e0:$("v_e0"), v_w0:$("v_w0"), v_speed:$("v_speed"),
+  btnApply:$("btnApply"), btnPause:$("btnPause"),
+  r_tau:$("r_tau"), r_e:$("r_e"), r_i:$("r_i"), r_w:$("r_w"), r_Om:$("r_Om"),
+  r_emax:$("r_emax"), r_regime:$("r_regime"),
+  r_H:$("r_H"), r_dH:$("r_dH"), r_dPhi:$("r_dPhi"), r_dt:$("r_dt"),
+  critNote:$("critNote"), warnBanner:$("warnBanner"),
+};
+
+function showWarn(msg){ el.warnBanner.textContent = msg; el.warnBanner.style.display = "block"; }
+function hideWarn(){ el.warnBanner.style.display = "none"; }
+
+function speedFromSlider(){ return Math.pow(10, parseFloat(el.s_speed.value)); }
+
+function fmtDeg(x){ return (x*R2D).toFixed(2) + "°"; }
+
+function updateSliderLabels(){
+  el.v_i0.textContent = parseFloat(el.s_i0.value).toFixed(1) + "°";
+  el.v_e0.textContent = parseFloat(el.s_e0.value).toFixed(3);
+  el.v_w0.textContent = parseFloat(el.s_w0.value).toFixed(0) + "°";
+  el.v_speed.textContent = speedFromSlider().toFixed(2);
+}
+
+/**
+ * Numerical libration/circulation prediction for the CURRENT slider values.
+ * Rationale (rigorous within this model): trajectories are level curves of
+ * Phi(G, omega; H) in the (omega, G) phase plane. In the quadrupole problem
+ * the libration islands are centered at omega = 90°/270°; a curve that
+ * reaches omega = 0 (mod 180°) must be circulating. So we test whether the
+ * level set Phi = Phi0 has a solution at omega = 0 with G in [|H|, 1].
+ * CAVEAT: very close to the separatrix the test (and the dynamics itself)
+ * becomes marginal; we flag near-zero minima as "indeterminate".
+ */
+function predictRegime(i0deg, e0, w0deg){
+  const G0 = Math.sqrt(1 - e0*e0);
+  const H  = G0 * Math.cos(i0deg * D2R);
+  const w0 = w0deg * D2R;
+  const Phi0 = Phi(G0, w0, H);
+  if (Math.abs(Math.sin(w0)) < 1e-9 || Math.abs(Math.sin(w0 - Math.PI)) < 1e-9){
+    return "circulation";                 // starts ON omega = 0/180: cannot librate about 90°/270°
+  }
+  const lo = Math.abs(H) + 1e-9, hi = 1;
+  let prev = null, minAbs = Infinity;
+  for (let k = 0; k <= 600; k++){
+    const G = lo + (hi - lo) * k / 600;
+    const f = Phi(G, 0, H) - Phi0;
+    minAbs = Math.min(minAbs, Math.abs(f));
+    if (prev !== null && (f === 0 || prev * f < 0)) return "circulation";
+    prev = f;
+  }
+  if (minAbs < 1e-3) return "境界付近（判定不定）";   // near-separatrix: marginal
+  return "libration";
+}
+
+/**
+ * Real-time explanation box: what each slider does to the orbit, updated on
+ * every slider input. Written for a first-year-undergraduate audience while
+ * keeping the statements rigorous within the quadrupole model. Every
+ * quantitative claim below is either (a) an established quadrupole result
+ * (critical angle, e_max formula — both valid in the e0→0 limit) or
+ * (b) an exact property of the implemented equations (H conservation,
+ * dG/dtau ∝ sin 2ω, i↔180°−i symmetry, level-curve regime test).
+ */
+function updateCritNote(){
+  const i0 = parseFloat(el.s_i0.value);
+  const e0 = parseFloat(el.s_e0.value);
+  const w0 = parseFloat(el.s_w0.value);
+  const G0 = Math.sqrt(1 - e0*e0);
+  const H0 = G0 * Math.cos(i0*D2R);
+  const inWindow = (i0 > I_CRIT && i0 < 180 - I_CRIT);
+
+  // --- i0 section -----------------------------------------------------
+  let secI;
+  if (!inWindow){
+    secI = `<b>KL window（${I_CRIT.toFixed(1)}°–${(180-I_CRIT).toFixed(1)}°）の外です。</b>
+      2つの軌道面がほぼ揃っている（i₀≈0°）か、ほぼ正反対（i₀≈180°）の場合、
+      外側の天体からの平均化された重力の影響では e を成長させられず、
+      e₀≈0 なら <b>e はほとんど変化しません</b>（このまま実行して確認できます）。
+      臨界角 i_c = arccos(√(3/5)) ≈ ${I_CRIT.toFixed(2)}° は quadrupole-order・e₀→0 極限で
+      確立された値で、e₀ が大きい場合は境界が移ります。`;
+    el.critNote.classList.add("warm");
+  } else {
+    const emax = Math.sqrt(Math.max(0, 1 - (5/3)*Math.pow(Math.cos(i0*D2R),2)));
+    secI = `<b>KL window 内です。</b>2つの軌道面が十分傾いていると、外側の天体の平均化された
+      重力が inner orbit の形を周期的に歪め、<b>e と i が交換される振動</b>（KL oscillation）が起きます。
+      e₀≈0 の場合の理論上の最大離心率は e_max = √(1 − (5/3)cos²i₀) = <b>${emax.toFixed(3)}</b>
+      （e₀ が大きい場合はこの式の適用外）。i₀ を 90° に近づけるほど e_max は 1 に近づき、振動は激しくなります。`;
+    if (i0 > 80 && i0 < 100){
+      secI += ` <b>注意:</b> i₀≈90° では e が 1 に極端に近づき、その極限では本モデル
+      （doubly-averaged secular approximation）自体が破綻します。e が閾値を超えるとアプリは自動で pause します。`;
+    }
+    if (i0 > 90){
+      secI += ` i₀ &gt; 90° は <b>retrograde</b>（内側と外側の公転が逆向き）ですが、
+      quadrupole-order には i ↔ 180°−i の厳密な対称性があり、e の振舞いは順行側と同じです。`;
+    }
+    el.critNote.classList.remove("warm");
+  }
+
+  // --- e0 section -----------------------------------------------------
+  const secE = `e₀ は i₀ と組み合わさって<b>保存量 H = √(1−e₀²)·cos i₀ = ${H0.toFixed(3)}</b> を決めます。
+    その後の運動はずっと √(1−e²)·cos i = H という制約を満たしながら進むので、
+    <b>e が上がれば i が下がる</b>（逆もまた然り）——これが KL oscillation の「e–i 交換」の正体です。
+    e₀ を大きくすると |H| が小さくなり、交換できる範囲・振動の振幅と周期・後述の libration/circulation の別が変わります。`;
+
+  // --- w0 section -----------------------------------------------------
+  const atTurning = (Math.abs(Math.sin(2*w0*D2R)) < 1e-6);
+  let secW = `ω₀ は楕円の初期の「向き」で、振動のどの位相から始めるかを決めます。
+    運動方程式より dG/dτ ∝ sin 2ω なので、<b>ω₀ = 0°, 90°, 180°, 270° では e がちょうど極値
+    （turning point）から出発</b>します`;
+  secW += atTurning ? `（現在の ω₀ = ${w0.toFixed(0)}° はまさにこの場合です）。` : `。`;
+  secW += ` ω₀ = 90° / 270° は Kozai resonance（libration island）の中心方向にあたります。`;
+
+  // --- regime prediction ----------------------------------------------
+  let secP = "";
+  const reg = predictRegime(i0, e0, w0);
+  secP = `<b>この初期条件の予測:</b> ω(τ) は <b>${reg}</b> になります
+    （libration = ω が 90° か 270° の周りを往復 ／ circulation = 一方向に回り続ける。
+    Hamiltonian の等高線 Φ = Φ₀ が ω = 0° を横切るかどうかによる数値判定で、
+    separatrix ごく近傍では不定になりえます）。実行後、中央の ω(τ) グラフで確認できます。`;
+  if (!inWindow && e0 < 0.15){
+    secP += ` ただし window 外＋e₀≈0 のため、いずれにせよ e の変化はごく小さいはずです。`;
+  }
+
+  el.critNote.innerHTML =
+    `<b>▸ i₀（軌道面の傾き）:</b> ${secI}<br><br>` +
+    `<b>▸ e₀（初期離心率）:</b> ${secE}<br><br>` +
+    `<b>▸ ω₀（近点の向き）:</b> ${secW}<br><br>` + secP;
+}
+
+/** Detect libration vs circulation from the recent ω history (diagnostic only). */
+function regimeLabel(){
+  const n = series.w.length;
+  if (n < 50) return "–";
+  const span = 300;
+  const recent = series.w.slice(Math.max(0, n - span));
+  const min = Math.min(...recent), max = Math.max(...recent);   // ω unwrapped
+  if (max - min >= 2*Math.PI) return "circulation";
+  if (max - min < Math.PI) return "libration (?)";
+  return "…";
+}
+
+function updateReadouts(){
+  const G = sim.y[0], w = sim.y[1], Om = sim.y[2];
+  const e = eOf(G), inc = iOf(G, sim.H);
+  const phiNow = Phi(G, w, sim.H);
+  const rel = Math.abs(phiNow - sim.Phi0) / sim.PhiRef;
+  sim.maxRelPhiDrift = Math.max(sim.maxRelPhiDrift, rel);
+
+  el.r_tau.textContent = sim.tau.toFixed(3) + "  (dimensionless)";
+  el.r_e.textContent = e.toFixed(5);
+  el.r_i.textContent = fmtDeg(inc);
+  el.r_w.textContent = ((((w*R2D)%360)+360)%360).toFixed(1) + "°";
+  el.r_Om.textContent = ((((Om*R2D)%360)+360)%360).toFixed(1) + "°";
+  el.r_H.textContent = sim.H.toFixed(8);
+  el.r_dH.textContent = "0（構成上厳密）";
+  // thresholds reflect that a per-step tolerance accumulates over long runs
+  const badge = rel < 1e-5 ? "ok" : rel < 1e-3 ? "warn" : "bad";
+  el.r_dPhi.innerHTML = rel.toExponential(2) + ` <span class="badge ${badge}">${badge==="ok"?"good":badge}</span>`;
+  el.r_dt.textContent = sim.dt.toExponential(1);
+  el.r_regime.textContent = regimeLabel();
+
+  const i0 = sim.i0deg;
+  if (i0 > I_CRIT && i0 < 180 - I_CRIT && sim.e0 < 0.15){
+    el.r_emax.textContent = Math.sqrt(Math.max(0,1-(5/3)*Math.pow(Math.cos(i0*D2R),2))).toFixed(3);
+  } else {
+    el.r_emax.textContent = "n/a（e₀≈0 極限の式の適用外）";
+  }
+}
+
+el.s_i0.addEventListener("input", ()=>{ updateSliderLabels(); updateCritNote(); });
+el.s_e0.addEventListener("input", ()=>{ updateSliderLabels(); updateCritNote(); });
+el.s_w0.addEventListener("input", ()=>{ updateSliderLabels(); updateCritNote(); });
+el.s_speed.addEventListener("input", updateSliderLabels);
+el.s_tol.addEventListener("change", ()=>{ sim.tol = parseFloat(el.s_tol.value); });
+el.btnApply.addEventListener("click", resetSim);
+el.btnPause.addEventListener("click", ()=>{
+  if (sim.broken) return;
+  sim.running = !sim.running;
+  el.btnPause.textContent = sim.running ? "Pause" : "Resume";
+});
+
+/* =========================================================================
+   4. TIME-SERIES BUFFERS & LIGHTWEIGHT CANVAS CHARTS (no external lib)
+   ========================================================================= */
+const series = {
+  cap: 2400,
+  tau: [], e: [], i: [], w: [], relPhi: [],
+  clear(){ this.tau=[]; this.e=[]; this.i=[]; this.w=[]; this.relPhi=[]; },
+  push(){
+    this.tau.push(sim.tau);
+    this.e.push(eOf(sim.y[0]));
+    this.i.push(iOf(sim.y[0], sim.H));
+    this.w.push(sim.y[1]);                       // unwrapped (rad)
+    const rel = Math.abs(Phi(sim.y[0], sim.y[1], sim.H) - sim.Phi0) / sim.PhiRef;
+    this.relPhi.push(rel);
+    if (this.tau.length > this.cap){
+      // keep a rolling window
+      const drop = this.tau.length - this.cap;
+      this.tau.splice(0,drop); this.e.splice(0,drop); this.i.splice(0,drop);
+      this.w.splice(0,drop); this.relPhi.splice(0,drop);
+    }
+  }
+};
+
+function fitCanvas(c){
+  const dpr = window.devicePixelRatio || 1;
+  const r = c.getBoundingClientRect();
+  if (r.width === 0) return null;
+  if (c.width !== Math.round(r.width*dpr) || c.height !== Math.round(r.height*dpr)){
+    c.width = Math.round(r.width*dpr); c.height = Math.round(r.height*dpr);
+  }
+  const ctx = c.getContext("2d");
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  return { ctx, W:r.width, H:r.height };
+}
+
+const PADL = 34, PADR = 34, PADT = 22, PADB = 16;
+
+function frameAxes(ctx,W,H){
+  ctx.clearRect(0,0,W,H);
+  ctx.strokeStyle = "#22304a"; ctx.lineWidth = 1;
+  ctx.strokeRect(PADL+0.5, PADT+0.5, W-PADL-PADR-1, H-PADT-PADB-1);
+}
+function xScale(W){ 
+  const t0 = series.tau[0], t1 = series.tau[series.tau.length-1];
+  const span = Math.max(1e-9, t1 - t0);
+  return t => PADL + (t - t0)/span * (W - PADL - PADR);
+}
+function plotLine(ctx, xs, ys, yMin, yMax, H, color, X, breakOnJump){
+  const y2px = v => PADT + (1 - (v - yMin)/(yMax - yMin)) * (H - PADT - PADB);
+  ctx.strokeStyle = color; ctx.lineWidth = 1.4; ctx.beginPath();
+  let started = false;
+  for (let k = 0; k < xs.length; k++){
+    const px = X(xs[k]), py = y2px(ys[k]);
+    if (breakOnJump && k > 0 && Math.abs(ys[k]-ys[k-1]) > (yMax-yMin)/2) started = false;
+    if (!started){ ctx.moveTo(px,py); started = true; } else ctx.lineTo(px,py);
+  }
+  ctx.stroke();
+}
+function axisLabel(ctx, txt, x, y, color, align){
+  ctx.fillStyle = color; ctx.font = "10px ui-monospace,monospace"; ctx.textAlign = align||"left";
+  ctx.fillText(txt, x, y);
+}
+
+function drawCharts(){
+  if (series.tau.length < 2) return;
+  const X0 = series.tau;
+
+  // --- chart 1: e & i (twin axes) ---
+  let f = fitCanvas($("chartEI"));
+  if (f){
+    const {ctx,W,H} = f; frameAxes(ctx,W,H);
+    const X = xScale(W);
+    plotLine(ctx, X0, series.e, 0, 1, H, "#ffb45e", X, false);
+    plotLine(ctx, X0, series.i.map(v=>v*R2D), 0, 180, H, "#5fd0ff", X, false);
+    axisLabel(ctx,"e:0",2,H-PADB,"#ffb45e"); axisLabel(ctx,"1",2,PADT+8,"#ffb45e");
+    axisLabel(ctx,"i:0°",W-2,H-PADB,"#5fd0ff","right"); axisLabel(ctx,"180°",W-2,PADT+8,"#5fd0ff","right");
+    // reference: critical cos^2 i = 3/5 line on i axis
+    const yc = PADT + (1 - I_CRIT/180)*(H-PADT-PADB);
+    ctx.setLineDash([3,4]); ctx.strokeStyle="rgba(95,208,255,.35)";
+    ctx.beginPath(); ctx.moveTo(PADL,yc); ctx.lineTo(W-PADR,yc); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  // --- chart 2: omega mod 360 ---
+  f = fitCanvas($("chartW"));
+  if (f){
+    const {ctx,W,H} = f; frameAxes(ctx,W,H);
+    const X = xScale(W);
+    const wm = series.w.map(v => ((v*R2D)%360+360)%360);
+    plotLine(ctx, X0, wm, 0, 360, H, "#c9a4ff", X, true);
+    // libration centers 90° / 270° (fixed points of quadrupole KL)
+    for (const yv of [90,270]){
+      const yy = PADT + (1 - yv/360)*(H-PADT-PADB);
+      ctx.setLineDash([3,4]); ctx.strokeStyle="rgba(201,164,255,.3)";
+      ctx.beginPath(); ctx.moveTo(PADL,yy); ctx.lineTo(W-PADR,yy); ctx.stroke(); ctx.setLineDash([]);
+    }
+    axisLabel(ctx,"0°",2,H-PADB,"#c9a4ff"); axisLabel(ctx,"360°",2,PADT+8,"#c9a4ff");
+  }
+
+  // --- chart 3: log10 |ΔΦ/Φ_ref| ---
+  f = fitCanvas($("chartH"));
+  if (f){
+    const {ctx,W,H} = f; frameAxes(ctx,W,H);
+    const X = xScale(W);
+    const lg = series.relPhi.map(v => Math.log10(Math.max(v, 1e-16)));
+    plotLine(ctx, X0, lg, -16, -2, H, "#5ee08a", X, false);
+    axisLabel(ctx,"-16",2,H-PADB,"#5ee08a"); axisLabel(ctx,"-2",2,PADT+8,"#5ee08a");
+    axisLabel(ctx,"H drift = 0 by construction (see note)", PADL+6, H-PADB-4, "#8fa0bd");
+  }
+}
+
+/* =========================================================================
+   5. THREE.JS SCENE  (SCHEMATIC — NOT TO SCALE)
+   ========================================================================= */
+const A_IN = 2.4;      // inner semi-major axis (schematic units)
+const R_OUT = 7.0;     // outer orbit radius (schematic; real systems: a_out >> a_in)
+
+const container = $("view3d");
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+container.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0f1a);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 300);
+
+/* minimal orbit camera (drag rotate + wheel zoom) — avoids OrbitControls dep */
+const cam = { r: 18, theta: 60*D2R, phi: 35*D2R, drag:false, px:0, py:0 };
+// FRAME_TILT: purely a composition choice — aims the camera slightly below the
+// origin so the orbit geometry renders higher in the viewport, leaving clear
+// space at the bottom for the body legend. It does not move or rescale any
+// physical object; it only changes where the same scene sits on screen.
+const FRAME_TILT = 0.22; // radians, downward look-at offset (proportional to r)
+function applyCamera(){
+  camera.position.set(
+    cam.r * Math.sin(cam.theta) * Math.cos(cam.phi),
+    cam.r * Math.sin(cam.theta) * Math.sin(cam.phi),
+    cam.r * Math.cos(cam.theta)
+  );
+  camera.up.set(0,0,1);
+  camera.lookAt(0, 0, -cam.r * Math.tan(FRAME_TILT));
+}
+renderer.domElement.addEventListener("pointerdown", e=>{ cam.drag=true; cam.px=e.clientX; cam.py=e.clientY; });
+window.addEventListener("pointerup", ()=> cam.drag=false);
+window.addEventListener("pointermove", e=>{
+  if(!cam.drag) return;
+  cam.phi   -= (e.clientX - cam.px) * 0.006;
+  cam.theta -= (e.clientY - cam.py) * 0.006;
+  cam.theta = Math.max(0.05, Math.min(Math.PI-0.05, cam.theta));
+  cam.px = e.clientX; cam.py = e.clientY; applyCamera();
+});
+renderer.domElement.addEventListener("wheel", e=>{
+  e.preventDefault();
+  cam.r = Math.max(6, Math.min(60, cam.r * (1 + Math.sign(e.deltaY)*0.08)));
+  applyCamera();
+}, {passive:false});
+
+/* lights */
+scene.add(new THREE.AmbientLight(0x8899bb, 0.55));
+const pl = new THREE.PointLight(0xffffff, 0.9); pl.position.set(12,10,16); scene.add(pl);
+
+/* reference (outer orbital) plane: translucent disc + polar grid */
+const planeGeo = new THREE.CircleGeometry(R_OUT*1.25, 72);
+const planeMat = new THREE.MeshBasicMaterial({ color:0x1a2b4a, transparent:true, opacity:0.22, side:THREE.DoubleSide });
+scene.add(new THREE.Mesh(planeGeo, planeMat));
+const grid = new THREE.PolarGridHelper(R_OUT*1.25, 12, 5, 72, 0x27395e, 0x1c2a48);
+grid.rotation.x = Math.PI/2;  // PolarGridHelper lies in xz; rotate into xy (z-up)
+scene.add(grid);
+
+/* outer orbit (blue circle) + companion (cool color) */
+{
+  const pts = [];
+  for(let k=0;k<=180;k++){ const a=k/180*2*Math.PI; pts.push(new THREE.Vector3(R_OUT*Math.cos(a), R_OUT*Math.sin(a), 0)); }
+  const g = new THREE.BufferGeometry().setFromPoints(pts);
+  scene.add(new THREE.Line(g, new THREE.LineBasicMaterial({ color:0x3a7bd5 })));
+}
+const companion = new THREE.Mesh(new THREE.SphereGeometry(0.32, 24, 16),
+  new THREE.MeshStandardMaterial({ color:0x5fd0ff, emissive:0x1a4a66, roughness:0.5 }));
+scene.add(companion);
+
+/* inner orbit ellipse (relative orbit, focus at origin) — geometry updated each frame */
+const N_ELL = 256;
+const ellGeo = new THREE.BufferGeometry();
+ellGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array((N_ELL+1)*3), 3));
+const ellLine = new THREE.Line(ellGeo, new THREE.LineBasicMaterial({ color:0xffb45e }));
+scene.add(ellLine);
+
+/* inner binary stars (warm colors) — schematic relative orbit:
+   primary at the focus, secondary moving on the ellipse */
+const starA = new THREE.Mesh(new THREE.SphereGeometry(0.34, 24, 16),
+  new THREE.MeshStandardMaterial({ color:0xffcf7a, emissive:0x664411, roughness:0.4 }));
+const starB = new THREE.Mesh(new THREE.SphereGeometry(0.24, 24, 16),
+  new THREE.MeshStandardMaterial({ color:0xff8a5c, emissive:0x662a11, roughness:0.4 }));
+scene.add(starA, starB);
+
+/* pericenter marker on the ellipse (visualizes omega precession) */
+const periDot = new THREE.Mesh(new THREE.SphereGeometry(0.10, 12, 8),
+  new THREE.MeshBasicMaterial({ color:0xffe9b0 }));
+scene.add(periDot);
+
+/* angular-momentum direction arrows: L_out (blue, = +z) and L_in (orange) */
+const arrowOut = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,0), 3.4, 0x3a7bd5, 0.5, 0.28);
+const arrowIn  = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,0), 3.4, 0xffb45e, 0.5, 0.28);
+scene.add(arrowOut, arrowIn);
+
+/* rotation: perifocal -> reference frame, R = Rz(Omega) Rx(i) Rz(omega) */
+const rotM = new THREE.Matrix4();
+function updateRotation(Om, inc, w){
+  // THREE Euler "ZXZ" is not built-in; compose explicitly:
+  const mOm = new THREE.Matrix4().makeRotationZ(Om);
+  const mI  = new THREE.Matrix4().makeRotationX(inc);
+  const mW  = new THREE.Matrix4().makeRotationZ(w);
+  rotM.copy(mOm).multiply(mI).multiply(mW);
+}
+const tmpV = new THREE.Vector3();
+function perifocalToWorld(x, y, out){
+  out.set(x, y, 0).applyMatrix4(rotM);
+  return out;
+}
+
+/* schematic fast phases (ILLUSTRATIVE ONLY — averaged out in secular theory) */
+let thetaInner = 0;       // true anomaly of inner relative orbit
+let phiOuter = 0;         // outer companion phase
+
+function updateScene(dtWall){
+  const G = sim.y[0], w = sim.y[1], Om = sim.y[2];
+  const e = eOf(G), inc = iOf(G, sim.H);
+  updateRotation(Om, inc, w);
+
+  // ellipse (focus at origin): r(theta) = a(1-e^2)/(1+e cos theta)
+  const p = A_IN * (1 - e*e);
+  const pos = ellGeo.attributes.position.array;
+  for (let k = 0; k <= N_ELL; k++){
+    const th = k/N_ELL * 2*Math.PI;
+    const r = p / (1 + e*Math.cos(th));
+    perifocalToWorld(r*Math.cos(th), r*Math.sin(th), tmpV);
+    pos[3*k] = tmpV.x; pos[3*k+1] = tmpV.y; pos[3*k+2] = tmpV.z;
+  }
+  ellGeo.attributes.position.needsUpdate = true;
+
+  // schematic inner-star motion, angular speed ∝ (1+e cosθ)^2 (Kepler's 2nd law shape)
+  if (sim.running){
+    const kfast = 1.6; // arbitrary visual rate — NOT physical
+    thetaInner += dtWall * kfast * Math.pow(1 + e*Math.cos(thetaInner), 2) / Math.pow(Math.max(1e-3,1-e*e), 1.5);
+    phiOuter   += dtWall * 0.25;
+  }
+  const rB = p / (1 + e*Math.cos(thetaInner));
+  perifocalToWorld(rB*Math.cos(thetaInner), rB*Math.sin(thetaInner), tmpV);
+  starB.position.copy(tmpV);
+  starA.position.set(0,0,0);
+
+  // pericenter marker at theta = 0
+  perifocalToWorld(p/(1+e), 0, tmpV);
+  periDot.position.copy(tmpV);
+
+  // inner angular-momentum direction = R * ez
+  tmpV.set(0,0,1).applyMatrix4(rotM).normalize();
+  arrowIn.setDirection(tmpV);
+
+  companion.position.set(R_OUT*Math.cos(phiOuter), R_OUT*Math.sin(phiOuter), 0);
+
+  updateAnnotations(G, w, Om, e, inc);
+}
+
+/* =========================================================================
+   5b. PAUSE-TIME GEOMETRIC ANNOTATIONS — where i, e, ω live in the picture
+   -------------------------------------------------------------------------
+   Shown only while the simulation is PAUSED (so the geometry holds still).
+   All of these are exact geometric definitions, not schematic decorations:
+     * i : the angle between the two orbit normals (angular-momentum arrows)
+           = the dihedral angle between the two orbital planes.
+     * node line : intersection of the inner orbital plane with the
+           reference (outer) plane. With our rotation R = Rz(Ω)Rx(i)Rz(ω),
+           the ASCENDING node (z increasing along the motion) lies along
+           Rz(Ω)·x̂ — verified from the sign of dz/dθ at the node.
+     * ω : the in-plane angle from the ascending node to the pericenter,
+           drawn as an arc INSIDE the inner orbital plane.
+     * e : drawn via its geometric definition e = c/a, where c is the
+           focus–center distance of the ellipse (center at −a·e in the
+           perifocal frame); the faint dashed line is the major axis (2a).
+   Degenerate cases are hidden honestly instead of drawn wrongly:
+     * sin i ≈ 0  → the node line (hence ω) is undefined → hidden.
+     * e ≈ 0      → the pericenter direction (hence ω) is undefined,
+                    and the focus coincides with the center → arc hidden,
+                    e-label explains the degeneracy.
+   ========================================================================= */
+const annot = new THREE.Group(); scene.add(annot);
+const N_ARC = 64;
+function mkAnnotLine(nPts, mat){
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(nPts*3), 3));
+  const l = new THREE.Line(g, mat); annot.add(l); return l;
+}
+const arcI     = mkAnnotLine(N_ARC+1, new THREE.LineBasicMaterial({ color:0xffffff, transparent:true, opacity:0.9 }));
+const arcW     = mkAnnotLine(N_ARC+1, new THREE.LineBasicMaterial({ color:0xc9a4ff }));
+const nodeLine = mkAnnotLine(2, new THREE.LineDashedMaterial({ color:0x8fa0bd, dashSize:0.28, gapSize:0.16 }));
+const majAxis  = mkAnnotLine(2, new THREE.LineDashedMaterial({ color:0xffb45e, dashSize:0.2, gapSize:0.14, transparent:true, opacity:0.55 }));
+const eccSeg   = mkAnnotLine(2, new THREE.LineBasicMaterial({ color:0xffe9b0 }));
+
+const lbl = { i:$("lbl_i"), w:$("lbl_w"), e:$("lbl_e"), node:$("lbl_node") };
+const projV = new THREE.Vector3();
+function placeLabel(div, wx, wy, wz, text){
+  projV.set(wx, wy, wz).project(camera);
+  if (projV.z > 1){ div.style.display = "none"; return; }
+  div.style.display = "block";
+  div.textContent = text;
+  div.style.left = ((projV.x*0.5 + 0.5) * container.clientWidth)  + "px";
+  div.style.top  = ((-projV.y*0.5 + 0.5) * container.clientHeight) + "px";
+}
+function hideLabels(){ for (const k in lbl) lbl[k].style.display = "none"; }
+function setSeg(line, ax,ay,az, bx,by,bz){
+  const p = line.geometry.attributes.position.array;
+  p[0]=ax; p[1]=ay; p[2]=az; p[3]=bx; p[4]=by; p[5]=bz;
+  line.geometry.attributes.position.needsUpdate = true;
+  line.computeLineDistances();   // needed for dashed materials
+}
+
+const vZ = new THREE.Vector3(0,0,1), vN = new THREE.Vector3(), vTmp = new THREE.Vector3();
+function updateAnnotations(G, w, Om, e, inc){
+  const paused = !sim.running && !sim.broken;
+  annot.visible = paused;
+  if (!paused){ hideLabels(); return; }
+
+  const a = A_IN, p = a*(1 - e*e);
+  const sinI = Math.sin(inc);
+  const nodeOK = sinI > 0.03;                       // node/ω undefined when planes coincide
+  const eOK = e > 0.02;                             // pericenter/ω undefined when circular
+  const wm = ((w % (2*Math.PI)) + 2*Math.PI) % (2*Math.PI);
+
+  // --- i : arc between the two angular-momentum directions (slerp) -----
+  vN.set(0,0,1).applyMatrix4(rotM).normalize();     // inner orbit normal
+  const showI = inc > 0.03 && inc < Math.PI - 0.03;
+  arcI.visible = showI;
+  if (showI){
+    const rI = 2.9, s = Math.sin(inc);
+    const pos = arcI.geometry.attributes.position.array;
+    for (let k = 0; k <= N_ARC; k++){
+      const t = k / N_ARC;
+      // spherical interpolation between ẑ (outer normal) and n̂ (inner normal)
+      vTmp.copy(vZ).multiplyScalar(Math.sin((1-t)*inc)/s)
+          .addScaledVector(vN, Math.sin(t*inc)/s).multiplyScalar(rI);
+      pos[3*k]=vTmp.x; pos[3*k+1]=vTmp.y; pos[3*k+2]=vTmp.z;
+    }
+    arcI.geometry.attributes.position.needsUpdate = true;
+    // label at the arc midpoint, pushed slightly outward
+    vTmp.copy(vZ).multiplyScalar(Math.sin(0.5*inc)/s)
+        .addScaledVector(vN, Math.sin(0.5*inc)/s).multiplyScalar(2.9*1.18);
+    placeLabel(lbl.i, vTmp.x, vTmp.y, vTmp.z,
+      `i = ${(inc*R2D).toFixed(1)}°（2つの矢印=軌道面法線のなす角）`);
+  } else {
+    placeLabel(lbl.i, 0, 0, 3.8, `i = ${(inc*R2D).toFixed(1)}°（軌道面ほぼ一致）`);
+  }
+
+  // --- node line & ω arc ------------------------------------------------
+  const nx = Math.cos(Om), ny = Math.sin(Om);       // ascending node = Rz(Ω)·x̂
+  nodeLine.visible = nodeOK;
+  arcW.visible = nodeOK && eOK;
+  if (nodeOK){
+    setSeg(nodeLine, -3.6*nx, -3.6*ny, 0, 3.6*nx, 3.6*ny, 0);
+    placeLabel(lbl.node, 3.6*nx, 3.6*ny, 0, "ascending node（ω を測る基準線）");
+  } else {
+    lbl.node.style.display = "none";
+  }
+  if (nodeOK && eOK){
+    // arc inside the inner orbital plane, from node (perifocal θ = −ω) to pericenter (θ = 0)
+    const rW = 1.45;
+    const pos = arcW.geometry.attributes.position.array;
+    for (let k = 0; k <= N_ARC; k++){
+      const th = -wm + wm * k / N_ARC;
+      perifocalToWorld(rW*Math.cos(th), rW*Math.sin(th), vTmp);
+      pos[3*k]=vTmp.x; pos[3*k+1]=vTmp.y; pos[3*k+2]=vTmp.z;
+    }
+    arcW.geometry.attributes.position.needsUpdate = true;
+    perifocalToWorld(1.95*Math.cos(-wm/2), 1.95*Math.sin(-wm/2), vTmp);
+    placeLabel(lbl.w, vTmp.x, vTmp.y, vTmp.z,
+      `ω = ${(wm*R2D).toFixed(1)}°（node→pericenter, 軌道面内の角）`);
+  } else if (paused){
+    lbl.w.style.display = "block";
+    lbl.w.textContent = eOK ? "ω: 軌道面が一致しているため node が定義できません"
+                            : "ω: e≈0（ほぼ円）のため pericenter 方向が定義できません";
+    lbl.w.style.left = "50%"; lbl.w.style.top = "88%";
+  }
+
+  // --- e : focus–center segment + major axis (e = c/a) ------------------
+  //   ellipse center in perifocal coords: (−a·e, 0); focus (star A) at origin
+  perifocalToWorld(-a*e, 0, vTmp);
+  const cx = vTmp.x, cy = vTmp.y, cz = vTmp.z;
+  eccSeg.visible = eOK;
+  majAxis.visible = true;
+  setSeg(eccSeg, 0,0,0, cx,cy,cz);
+  perifocalToWorld(a*(1-e), 0, vTmp);               // pericenter
+  const px_ = vTmp.x, py_ = vTmp.y, pz_ = vTmp.z;
+  perifocalToWorld(-a*(1+e), 0, vTmp);              // apocenter
+  setSeg(majAxis, px_,py_,pz_, vTmp.x, vTmp.y, vTmp.z);
+  placeLabel(lbl.e, cx, cy, cz,
+    eOK ? `e = ${e.toFixed(3)} = c/a（黄線 c = 中心–焦点距離）`
+        : `e = ${e.toFixed(3)}（ほぼ円: 中心と焦点が一致）`);
+}
+
+function resize3D(){
+  const r = container.getBoundingClientRect();
+  renderer.setSize(r.width, r.height, false);
+  camera.aspect = r.width / Math.max(1, r.height);
+  camera.updateProjectionMatrix();
+}
+window.addEventListener("resize", resize3D);
+
+/* =========================================================================
+   6. MAIN LOOP
+   ========================================================================= */
+let lastT = performance.now();
+let frameCount = 0;
+function loop(now){
+  const dtWall = Math.min(0.05, (now - lastT)/1000);
+  lastT = now;
+  advance(speedFromSlider() * dtWall);
+  if (sim.running && !sim.broken) series.push();
+  updateScene(dtWall);
+  renderer.render(scene, camera);
+  if ((frameCount++ & 1) === 0){ updateReadouts(); drawCharts(); }
+  requestAnimationFrame(loop);
+}
+
+updateSliderLabels();
+resetSim();
+resize3D();
+applyCamera();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
